@@ -1,0 +1,31 @@
+version: '3.3'
+services:
+  departure-tax-api:
+    image: repo.sadad.co.ir/repository/baam-docker-registry/departure-tax-api:BUILD_NUMBER
+    container_name: departure-tax-api
+    hostname: departure-tax-api-srv
+    networks:
+      neo-baam:
+        aliases:
+          - departure-tax-api-srv
+    ports:
+      - 8522:8522
+      - 1520:1520
+    tty: true
+    extra_hosts:
+      - "cache:192.168.53.58"
+      - "cache1:192.168.53.58"
+      - "config-srv:192.168.53.73"
+    volumes:
+      - /var/log/departure-tax-api:/var/log/departure-tax-api
+      - /opt/configs/departure-tax-api:/opt/configs/departure-tax-api
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE}
+      - JVM_OPTS=-Dfile.encoding=UTF8
+    working_dir: /
+    build: .
+    restart: always
+    command: [ "/usr/bin/java", "-jar", "/departure-tax-api-0.0.1-SNAPSHOT.jar" ]
+networks:
+  neo-baam:
+    driver: bridge

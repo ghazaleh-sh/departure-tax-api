@@ -14,7 +14,7 @@ public interface DepartureTaxService {
 
     PushOrderFinalResDto executePaymentAndPushOrder(PaymentFinalReqDto finalUserReqDto, String token, String userAgent);
 
-    PushOrderFinalResDto pushOrderRequest(String requestId, Boolean inquiry);
+    PushOrderFinalResDto pushOrderRequest(String requestId, String traceId, String initiateDate, Boolean inquiry);
 
     List<DepartureTaxHistoryResDto> departureTaxHistory(DepartureTaxHistoryReqDto req, String ssn);
 

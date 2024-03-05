@@ -19,12 +19,12 @@ public class ConverterHelper {
 
     public static String createRRNRandomly() {
         Random random = new Random();
-        char[] digits = new char[12];
+        char[] digits = new char[10];
         digits[0] = (char) (random.nextInt(9) + '1');
-        for (int i = 1; i < 12; i++) {
+        for (int i = 1; i < 10; i++) {
             digits[i] = (char) (random.nextInt(10) + '0');
         }
-        return new String(digits);
+        return DEFAULT_CODE + new String(digits);
     }
 
     public static String convertResponseToJson(ThirdPartyServicesResponse data) {

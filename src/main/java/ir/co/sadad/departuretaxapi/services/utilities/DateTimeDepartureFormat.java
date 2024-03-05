@@ -2,6 +2,7 @@ package ir.co.sadad.departuretaxapi.services.utilities;
 
 import java.time.*;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 
 public class DateTimeDepartureFormat {
 
@@ -48,5 +49,12 @@ public class DateTimeDepartureFormat {
         } catch (Exception e) {
             return inputDate;
         }
+    }
+
+    public static ZonedDateTime daysBeforeCurrentUTCDate(Integer days) {
+        ZonedDateTime currentDateTime = ZonedDateTime.now(ZoneId.of("UTC"));
+
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
+        return ZonedDateTime.parse(currentDateTime.minusDays(days).format(formatter));
     }
 }

@@ -66,16 +66,14 @@ public class StatusManagementService {
 
         } catch (Exception e) {
             log.error("changing status to paymentOrder has error " + e.getMessage());
-            e.getStackTrace();
         }
     }
 
-//    @Transactional
-    public void saveInitiationPaymentResult(InitiationPaymentReqDto req, PaymentOrderResDto result) {
+    //    @Transactional
+    public void saveInitiationPaymentSuccessResult(InitiationPaymentReqDto req, PaymentOrderResDto result) {
+        DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(result.getRequestId())
+                .orElseThrow(() -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
         try {
-            DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(result.getRequestId())
-                    .orElseThrow(() -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
-
             DepartureTaxPayment payment = new DepartureTaxPayment();
             modelMapper.map(req, payment);
             payment.setInstructionIdentification(result.getInstructionIdentification());
@@ -86,11 +84,22 @@ public class StatusManagementService {
             savedUser.setUserPayment(savedPayment);
             departureTaxUserRepository.saveAndFlush(savedUser);
 
-        } catch (DepartureTaxException e) {
-            log.error("storing initiated payment has error: " + e.getMessage());
+        } catch (Exception e) {
+            log.error("storing success initiated payment has error: " + e.getMessage());
             throw new DepartureTaxException("initiation.payment.db.exception", HttpStatus.INTERNAL_SERVER_ERROR);
         }
+    }
 
+    public void saveInitiationPaymentFailedResult(String requestId) {
+        DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(requestId).orElseThrow(
+                () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
+        try {
+            savedUser.setRequestStatus(DepartureRequestStatus.paymentInitFailed);
+            savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
+            departureTaxUserRepository.saveAndFlush(savedUser);
+        } catch (Exception e) {
+            log.error("storing failed initiated payment has error: " + e.getMessage());
+        }
     }
 
     public void saveExecutionPaymentRequest(DepartureTaxUser savedUser) {
@@ -99,17 +108,14 @@ public class StatusManagementService {
             departureTaxUserRepository.saveAndFlush(savedUser);
 
         } catch (Exception e) {
-            log.error("changing status to paymentExecutionOrder has error " + e.getMessage());
-            e.getStackTrace();
+            log.error("changing status to paymentExeOrder has error " + e.getMessage());
         }
-
     }
 
-//    @Transactional
-    public void saveExecutionPaymentResult(ExecutionPaymentResDto result, String userId) {
+    //    @Transactional
+    public void saveExecutionPaymentSuccessResult(ExecutionPaymentResDto result, String userId) {
         DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(userId).orElseThrow(
                 () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
-
         try {
             DepartureTaxPayment savedPayment = savedUser.getUserPayment();
             savedPayment.setIdentification(result.getIdentification());
@@ -127,69 +133,100 @@ public class StatusManagementService {
             savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
             departureTaxUserRepository.saveAndFlush(savedUser);
 
-        } catch (DepartureTaxException e) {
-            log.error("storing execution payment has error: " + e.getMessage());
-            throw new DepartureTaxException("execution.payment.db.exception", HttpStatus.INTERNAL_SERVER_ERROR);
+        } catch (Exception e) {
+            log.error("storing success execution payment has error: " + e.getMessage());
+            //TODO: call job
         }
 
     }
 
+    public void saveExecutionPaymentFailedResult(ExecutionPaymentResDto result, String requestId) {
+        DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(requestId).orElseThrow(
+                () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
+        try {
+            DepartureTaxPayment savedPayment = savedUser.getUserPayment();
+            if (result != null) {
+                savedPayment.setIdentification(result.getIdentification());
+                savedPayment.setInitiatorReference(result.getInitiatorReference());
+                savedPayment.setInitiatorName(result.getInitiatorName());
+                savedPayment.setInitiationDate(DateTimeDepartureFormat.paymentDate(result.getInitiationDate()));
+                savedPayment.setPayeeReference(result.getPayeeReference());
+                savedPayment.setTransactionStatus(result.getTransactionStatus());  //FAILED
+                savedPayment.setTransactionDescription(result.getTransactionDescription());
+                savedPayment.setInstructionDescription(result.getInstructionDescription());
+                savedPayment.setTraceId(result.getTraceId());
+            } else savedPayment.setTransactionStatus(TransactionStatus.ERROR4XX_EXE);
 
-    public void savePushOrderRequest(String userId) {
+            taxPaymentRepository.saveAndFlush(savedPayment);
+
+            savedUser.setRequestStatus(DepartureRequestStatus.paymentExeFailed);
+            savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
+            departureTaxUserRepository.saveAndFlush(savedUser);
+        } catch (Exception e) {
+            log.error("storing failed execution payment has error: " + e.getMessage());
+            //TODO: call job
+        }
+    }
+
+    public void saveExecutionPaymentProcessingResult(ExecutionPaymentResDto result, String userId) {
         DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(userId).orElseThrow(
                 () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
-
         try {
-            savedUser.setRequestStatus(DepartureRequestStatus.pushOrderRequest);
+            DepartureTaxPayment savedPayment = savedUser.getUserPayment();
+            if (result != null) {
+                savedPayment.setIdentification(result.getIdentification());
+                savedPayment.setInitiatorReference(result.getInitiatorReference());
+                savedPayment.setInitiatorName(result.getInitiatorName());
+                savedPayment.setInitiationDate(DateTimeDepartureFormat.paymentDate(result.getInitiationDate()));
+                savedPayment.setPayeeReference(result.getPayeeReference());
+                savedPayment.setTransactionStatus(result.getTransactionStatus()); //UNKNOWN
+                savedPayment.setTransactionDescription(result.getTransactionDescription());
+                savedPayment.setInstructionDescription(result.getInstructionDescription());
+                savedPayment.setTraceId(result.getTraceId());
+
+            } else savedPayment.setTransactionStatus(TransactionStatus.ERROR5XX_EXE);
+
+            taxPaymentRepository.saveAndFlush(savedPayment);
+
+            savedUser.setRequestStatus(DepartureRequestStatus.PROCESSING);
+            savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
             departureTaxUserRepository.saveAndFlush(savedUser);
 
         } catch (Exception e) {
-            log.error("changing status to pushOrderRequest has error " + e.getMessage());
-            e.getStackTrace();
+            log.error("changing status to processing in inquiry service has error " + e.getMessage());
+            savedUser.setRequestStatus(DepartureRequestStatus.PROCESSING);
+            savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
+            departureTaxUserRepository.saveAndFlush(savedUser);
         }
     }
 
 
-    public void savePushOrderSuccessResult(PushOrderResDto result, String userId) {
+    public void savePaymentInquiryProcessingResult(PaymentInquiryResDto result, String userId) {
         DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(userId).orElseThrow(
                 () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
         try {
-            savedUser.setOrderId(result.getOrderId());
-            savedUser.setOfflineId(result.getOfflineId());
-            savedUser.setReferenceNumber(result.getReferenceNumber());
-            savedUser.setRequestStatus(DepartureRequestStatus.SUCCESS);
+            DepartureTaxPayment savedPayment = savedUser.getUserPayment();
+            if (result != null) {
+                savedPayment.setInitiationDate(DateTimeDepartureFormat.paymentDate(result.getInitiationDate()));
+                savedPayment.setTransactionStatus(result.getTransactionStatus()); //UNKNOWN
+                savedPayment.setTraceId(result.getTraceId());
+            }
+            else savedPayment.setTransactionStatus(TransactionStatus.ERROR5XX_INQUIRY);
+
+            taxPaymentRepository.saveAndFlush(savedPayment);
+
+            savedUser.setRequestStatus(DepartureRequestStatus.PROCESSING);
             savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
             departureTaxUserRepository.saveAndFlush(savedUser);
 
-        } catch (DepartureTaxException e) {
-            log.error("storing pushOrder result has error: " + e.getMessage());
-
-            savedUser.setRequestStatus(DepartureRequestStatus.UNKNOWN);
-            savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
-            departureTaxUserRepository.saveAndFlush(savedUser);
+        } catch (Exception e) {
+            log.error("storing execution payment has error: " + e.getMessage());
         }
 
     }
 
-    public void saveInitiationPaymentFailedResult(String requestId) {
-        DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(requestId).orElseThrow(
-                () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
 
-        savedUser.setRequestStatus(DepartureRequestStatus.paymentInitFailed);
-        savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
-        departureTaxUserRepository.saveAndFlush(savedUser);
-    }
-
-    public void saveExecutionPaymentFailedResult(String requestId) {
-        DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(requestId).orElseThrow(
-                () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
-
-        savedUser.setRequestStatus(DepartureRequestStatus.paymentExeFailed);
-        savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
-        departureTaxUserRepository.saveAndFlush(savedUser);
-    }
-
-    public void savePaymentInquiryResult(PaymentInquiryResDto result, String userId) {
+    public void savePaymentInquirySuccessResult(PaymentInquiryResDto result, String userId) {
         DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(userId).orElseThrow(
                 () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
 
@@ -204,9 +241,9 @@ public class StatusManagementService {
             savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
             departureTaxUserRepository.saveAndFlush(savedUser);
 
-        } catch (DepartureTaxException e) {
-            log.error("storing execution payment has error: " + e.getMessage());
-            throw new DepartureTaxException("execution.payment.db.exception", HttpStatus.INTERNAL_SERVER_ERROR);
+        } catch (Exception e) {
+            log.error("storing success payment inquiry has error: " + e.getMessage());
+            //TODO: call job to save data again
         }
     }
 
@@ -216,40 +253,57 @@ public class StatusManagementService {
 
         try {
             DepartureTaxPayment savedPayment = savedUser.getUserPayment();
-            savedPayment.setInitiationDate(DateTimeDepartureFormat.paymentDate(result.getInitiationDate()));
-            savedPayment.setTransactionStatus(result.getTransactionStatus());
-            savedPayment.setTraceId(result.getTraceId());
+            if (result != null) {
+                savedPayment.setInitiationDate(DateTimeDepartureFormat.paymentDate(result.getInitiationDate()));
+                savedPayment.setTransactionStatus(result.getTransactionStatus());  //FAILED
+                savedPayment.setTraceId(result.getTraceId());
+
+            } else savedPayment.setTransactionStatus(TransactionStatus.ERROR4XX_INQUIRY);
+
             taxPaymentRepository.saveAndFlush(savedPayment);
 
             savedUser.setRequestStatus(DepartureRequestStatus.FAILED);
             savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
             departureTaxUserRepository.saveAndFlush(savedUser);
 
-        } catch (DepartureTaxException e) {
+        } catch (Exception e) {
             log.error("storing execution payment has error: " + e.getMessage());
-            throw new DepartureTaxException("execution.payment.db.exception", HttpStatus.INTERNAL_SERVER_ERROR);
+            savedUser.setRequestStatus(DepartureRequestStatus.FAILED);
+            savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
+            departureTaxUserRepository.saveAndFlush(savedUser);
         }
 
     }
 
-    public void savePaymentInquiryProcessingResult(PaymentInquiryResDto result, String userId) {
+    public void savePushOrderRequest(String userId) {
         DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(userId).orElseThrow(
                 () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
         try {
-            if (result != null) {
-                DepartureTaxPayment savedPayment = savedUser.getUserPayment();
-                savedPayment.setInitiationDate(DateTimeDepartureFormat.paymentDate(result.getInitiationDate()));
-                savedPayment.setTransactionStatus(result.getTransactionStatus());
-                savedPayment.setTraceId(result.getTraceId());
-                taxPaymentRepository.saveAndFlush(savedPayment);
-            }
-            savedUser.setRequestStatus(DepartureRequestStatus.PROCESSING);
+            savedUser.setRequestStatus(DepartureRequestStatus.pushOrderRequest);
+            departureTaxUserRepository.saveAndFlush(savedUser);
+
+        } catch (Exception e) {
+            log.error("changing status to pushOrderRequest has error " + e.getMessage());
+        }
+    }
+
+    public void savePushOrderSuccessResult(PushOrderResDto result, String userId) {
+        DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(userId).orElseThrow(
+                () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
+        try {
+            savedUser.setOrderId(result.getOrderId());
+            savedUser.setOfflineId(result.getOfflineId());
+            savedUser.setReferenceNumber(result.getReferenceNumber());
+            savedUser.setRequestStatus(DepartureRequestStatus.SUCCESS);
             savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
             departureTaxUserRepository.saveAndFlush(savedUser);
 
-        } catch (DepartureTaxException e) {
-            log.error("storing execution payment has error: " + e.getMessage());
-            throw new DepartureTaxException("execution.payment.db.exception", HttpStatus.INTERNAL_SERVER_ERROR);
+        } catch (Exception e) {
+            log.error("storing pushOrder result has error: " + e.getMessage());
+            savedUser.setRequestStatus(DepartureRequestStatus.SUCCESS);
+            savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
+            departureTaxUserRepository.saveAndFlush(savedUser);
+            //TODO: cal job to store data
         }
 
     }
@@ -264,45 +318,7 @@ public class StatusManagementService {
             departureTaxUserRepository.saveAndFlush(savedUser);
 
         } catch (Exception e) {
-            log.error("changing status to pending has error " + e.getMessage());
-            e.getStackTrace();
-        }
-    }
-
-    public void saveExecutionPaymentProcessingResult(ExecutionPaymentResDto result, String userId) {
-        DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(userId).orElseThrow(
-                () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
-
-        try {
-            try {
-                DepartureTaxPayment savedPayment = savedUser.getUserPayment();
-                if (result != null) {
-                    savedPayment.setIdentification(result.getIdentification());
-                    savedPayment.setInitiatorReference(result.getInitiatorReference());
-                    savedPayment.setInitiatorName(result.getInitiatorName());
-                    savedPayment.setInitiationDate(DateTimeDepartureFormat.paymentDate(result.getInitiationDate()));
-                    savedPayment.setPayeeReference(result.getPayeeReference());
-                    savedPayment.setTransactionStatus(result.getTransactionStatus());
-                    savedPayment.setTransactionDescription(result.getTransactionDescription());
-                    savedPayment.setInstructionDescription(result.getInstructionDescription());
-                    savedPayment.setTraceId(result.getTraceId());
-                }
-                else savedPayment.setTransactionStatus(TransactionStatus.ERROR5XX);
-
-                taxPaymentRepository.saveAndFlush(savedPayment);
-
-                savedUser.setRequestStatus(DepartureRequestStatus.PROCESSING);
-                savedUser.setResponseDateTime(DateTimeDepartureFormat.currentUTCDate());
-                departureTaxUserRepository.saveAndFlush(savedUser);
-
-            } catch (DepartureTaxException e) {
-                log.error("storing execution payment has error: " + e.getMessage());
-                throw new DepartureTaxException("execution.payment.db.exception", HttpStatus.INTERNAL_SERVER_ERROR);
-            }
-
-        } catch (Exception e) {
-            log.error("changing status to pending has error " + e.getMessage());
-            e.getStackTrace();
+            log.error("changing status to unknown in pushOrder has error " + e.getMessage());
         }
     }
 

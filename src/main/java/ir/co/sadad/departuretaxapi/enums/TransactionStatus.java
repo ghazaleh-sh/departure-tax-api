@@ -11,6 +11,9 @@ public enum TransactionStatus {
 
     UNKNOWN,
     ACTIVE,
-    ERROR5XX
+    ERROR5XX_EXE,
+    ERROR4XX_EXE,
+    ERROR5XX_INQUIRY,
+    ERROR4XX_INQUIRY
 
 }

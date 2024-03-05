@@ -32,10 +32,10 @@ public class MoneyTransferServiceImpl implements MoneyTransferService {
     private final StatusManagementService statusManagement;
 
     @Value(value = "${taxPayment.initiation_url}")
-    private String initiationUrl;//="http://localhost:2000/transfer/resources/api/payments/initiation";
+    private String initiationUrl;
 
     @Value(value = "${taxPayment.execute_url}")
-    private String executeUrl;// ="http://localhost:2000/transfer/resources/api/payments/";
+    private String executeUrl;
 
     @Value(value = "${taxPayment.resend_sms_url}")
     private String resendSmsUrl;
@@ -63,26 +63,9 @@ public class MoneyTransferServiceImpl implements MoneyTransferService {
                         new ParameterizedTypeReference<InitiationPaymentReqDto>() {
                         })
                 .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError, res ->
-                        res.bodyToMono(PaymentFailedDto.class)
-                                .flatMap(errorDto -> {
-                                    log.error("4xx Error in paymentInitiation service");
-                                    save4xxException(errorDto, requestId, "paymentInitiation");
-                                    return Mono.error(new PaymentTax4xxException(errorDto.getMessage(),
-                                            (errorDto.getDetails() != null &&!errorDto.getDetails().isEmpty()) ? errorDto.getDetails().get(0).getMessage() : null,
-                                            (errorDto.getDetails() != null &&!errorDto.getDetails().isEmpty()) ? errorDto.getDetails().get(0).getItem() : null,
-                                            res.statusCode()));
-                                })
-                )
-                .onStatus(HttpStatusCode::is5xxServerError, res ->
-                        res.bodyToMono(PaymentFailedDto.class)
-                                .flatMap(errorDto -> {
-                                    log.error("5xx Error in paymentInitiation service");
-                                    save5xxException(errorDto, requestId, "paymentInitiation");
-                                    return Mono.error(new PaymentTaxException("initiation.payment.failed", errorDto.getMessage(),
-                                            null, res.statusCode()));
-                                })
-                )
+                .onStatus(HttpStatusCode::is4xxClientError, res -> handle4xxError(res, requestId, "paymentInitiation"))
+                .onStatus(HttpStatusCode::is5xxServerError, res -> handle5xxError(res, requestId, "paymentInitiation"))
+
                 .bodyToMono(InitiationPaymentResDto.class);
         return response.block();
 
@@ -101,26 +84,9 @@ public class MoneyTransferServiceImpl implements MoneyTransferService {
                         new ParameterizedTypeReference<ExecutionPaymentReqDto>() {
                         })
                 .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError, res ->
-                        res.bodyToMono(PaymentFailedDto.class)
-                                .flatMap(errorDto -> {
-                                    log.error("4xx Error in paymentExecution service");
-                                    save4xxException(errorDto, requestId, "paymentExecution");
-                                    return Mono.error(new PaymentTax4xxException(errorDto.getMessage(),
-                                            (errorDto.getDetails() != null &&!errorDto.getDetails().isEmpty()) ? errorDto.getDetails().get(0).getMessage() : null,
-                                            (errorDto.getDetails() != null &&!errorDto.getDetails().isEmpty()) ? errorDto.getDetails().get(0).getItem() : null,
-                                            res.statusCode()));
-                                })
-                )
-                .onStatus(HttpStatusCode::is5xxServerError, res ->
-                        res.bodyToMono(PaymentFailedDto.class)
-                                .flatMap(errorDto -> {
-                                    log.error("5xx Error in paymentExecution service");
-                                    save5xxException(errorDto, requestId, "paymentExecution");
-                                    return Mono.error(new PaymentTaxException("execution.payment.failed", errorDto.getMessage(),
-                                            null, res.statusCode()));
-                                })
-                )
+                .onStatus(HttpStatusCode::is4xxClientError, res -> handle4xxError(res, requestId, "paymentExecution"))
+                .onStatus(HttpStatusCode::is5xxServerError, res -> handle5xxError(res, requestId, "paymentExecution"))
+
                 .bodyToMono(ExecutionPaymentResDto.class);
         return response.block();
 
@@ -135,26 +101,9 @@ public class MoneyTransferServiceImpl implements MoneyTransferService {
                 .uri(resendSmsUrl, uri -> uri.queryParam("instructionIdentification", instructionIdentification).build())
                 .headers(httpHeaders -> httpHeaders.addAll(setHeaders(token, userAgent)))
                 .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError, res ->
-                        res.bodyToMono(PaymentFailedDto.class)
-                                .flatMap(errorDto -> {
-                                    log.error("4xx Error in resendSms service");
-                                    save4xxException(errorDto, requestId, "resendSms");
-                                    return Mono.error(new PaymentTax4xxException(errorDto.getMessage(),
-                                            (errorDto.getDetails() != null &&!errorDto.getDetails().isEmpty()) ? errorDto.getDetails().get(0).getMessage() : null,
-                                            (errorDto.getDetails() != null &&!errorDto.getDetails().isEmpty()) ? errorDto.getDetails().get(0).getItem() : null,
-                                            res.statusCode()));
-                                })
-                )
-                .onStatus(HttpStatusCode::is5xxServerError, res ->
-                        res.bodyToMono(PaymentFailedDto.class)
-                                .flatMap(errorDto -> {
-                                    log.error("5xx Error in resendSms service");
-                                    save5xxException(errorDto, requestId, "resendSms");
-                                    return Mono.error(new PaymentTaxException("resend.payment.failed", errorDto.getMessage(),
-                                            null, res.statusCode()));
-                                })
-                )
+                .onStatus(HttpStatusCode::is4xxClientError, res -> handle4xxError(res, requestId, "resendSms"))
+                .onStatus(HttpStatusCode::is5xxServerError, res -> handle5xxError(res, requestId, "resendSms"))
+
                 .bodyToMono(Void.class)
                 .block();
     }
@@ -169,97 +118,80 @@ public class MoneyTransferServiceImpl implements MoneyTransferService {
                 .uri(inquiryUrl + instructionIdentification)
                 .headers(httpHeaders -> httpHeaders.addAll(setHeaders(token, userAgent)))
                 .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError, res ->
-                        res.bodyToMono(PaymentFailedDto.class)
-                                .flatMap(errorDto -> {
-                                    log.error("4xx Error in paymentInquiry service");
-                                    save4xxException(errorDto, requestId, "paymentInquiry");
-                                    return Mono.error(new PaymentTax4xxException(errorDto.getMessage(),
-                                            (errorDto.getDetails() != null &&!errorDto.getDetails().isEmpty()) ? errorDto.getDetails().get(0).getMessage() : null,
-                                            (errorDto.getDetails() != null &&!errorDto.getDetails().isEmpty()) ? errorDto.getDetails().get(0).getItem() : null,
-                                            res.statusCode()));
-                                })
-                )
-                .onStatus(HttpStatusCode::is5xxServerError, res ->
-                        res.bodyToMono(PaymentFailedDto.class)
-                                .flatMap(errorDto -> {
-                                    log.error("5xx Error in paymentInquiry service");
-                                    save5xxException(errorDto, requestId, "paymentInquiry");
-                                    return Mono.error(new PaymentTaxException("inquiry.payment.failed", errorDto.getMessage(),
-                                            null, res.statusCode()));
-                                })
-                        )
+                .onStatus(HttpStatusCode::is4xxClientError, res -> handle4xxError(res, requestId, "paymentInquiry"))
+                .onStatus(HttpStatusCode::is5xxServerError, res -> handle5xxError(res, requestId, "paymentInquiry"))
+
                 .bodyToMono(PaymentInquiryResDto.class);
         return response.block();
     }
 
-    public void save4xxException(PaymentFailedDto errorDto, String requestId, String serviceName){
-        log.error("4xx Error in save4xxException method: {}", errorDto);
-
-        if (serviceName.equals("paymentInitiation")) {
-            statusManagement.saveInitiationPaymentFailedResult(requestId);
-        } else if (serviceName.equals("paymentExecution")) {
-            statusManagement.saveExecutionPaymentFailedResult(requestId);
-        }
-
-        statusManagement.saveExceptionLogs("PaymentTax4xxException", errorDto.getMessage(), requestId,
-                ConverterHelper.convertResponseToJson(errorDto), serviceName, "EXCEPTION");
-    }
-
-
-    public void save5xxException(PaymentFailedDto errorDto, String requestId, String serviceName){
-        log.error("5xx Error in save5xxException method: {}", errorDto);
-
-        if (serviceName.equals("paymentInitiation")) {
-            statusManagement.saveInitiationPaymentFailedResult(requestId);
-        } else if (serviceName.equals("paymentExecution")) {
-            statusManagement.saveExecutionPaymentProcessingResult(null, requestId);
-        }
-
-        statusManagement.saveExceptionLogs("PaymentTax5xxException", errorDto.getMessage(), requestId,
-                ConverterHelper.convertResponseToJson(errorDto), serviceName, "EXCEPTION");
-    }
-
-//    @SneakyThrows
-//    private Mono<? extends Throwable> handle4xxError(ClientResponse response, String requestId, String serviceName) {
-//        log.error("4xx Error in save4xxException method");
+//    public void save4xxException(PaymentFailedDto errorDto, String requestId, String serviceName){
+//        log.error("4xx Error in save4xxException method: {}", errorDto);
 //
-//        if (serviceName.equals("paymentInitiation")) {
-//            statusManagement.saveInitiationPaymentFailedResult(requestId);
-//        } else if (serviceName.equals("paymentExecution")) {
-//            statusManagement.saveExecutionPaymentFailedResult(requestId);
+//        switch (serviceName) {
+//            case "paymentInitiation" -> statusManagement.saveInitiationPaymentFailedResult(requestId);
+//            case "paymentExecution" -> statusManagement.saveExecutionPaymentFailedResult(null, requestId);
+//            case "paymentInquiry" -> statusManagement.savePaymentInquiryFailedResult(null, requestId);
 //        }
 //
-//        return response.bodyToMono(PaymentFailedDto.class)
-//                .flatMap(errorDto -> {
-//                    log.error("4xx Error: {}", errorDto);
-//                    statusManagement.saveExceptionLogs("PaymentTax4xxException", errorDto.getMessage(), requestId,
-//                            ConverterHelper.convertResponseToJson(errorDto), serviceName, "EXCEPTION");
-//                    return Mono.error(new PaymentTax4xxException(errorDto.getMessage(),
-//                            errorDto.getDetails() != null ? errorDto.getDetails().get(0).getMessage() : null,
-//                            errorDto.getDetails() != null ? errorDto.getDetails().get(0).getItem() : null,
-//                            response.statusCode()));
-//                });
-//
+//        statusManagement.saveExceptionLogs("PaymentTax4xxException", errorDto.getMessage(), requestId,
+//                ConverterHelper.convertResponseToJson(errorDto), serviceName, "EXCEPTION");
 //    }
 
-//    @SneakyThrows
-//    private Mono<? extends Throwable> handle5xxError(ClientResponse response, String requestId, String serviceName) {
-//        log.error("5xx Error in payment service");
+
+//    public void save5xxException(PaymentFailedDto errorDto, String requestId, String serviceName){
+//        log.error("5xx Error in save5xxException method: {}", errorDto);
 //
-//        if (serviceName.equals("paymentInitiation")) {
-//            statusManagement.saveInitiationPaymentFailedResult(requestId);
-//        } else if (serviceName.equals("paymentExecution")) {
-//            statusManagement.saveExecutionPaymentProcessingResult(null, requestId);
+//        switch (serviceName) {
+//            case "paymentInitiation" -> statusManagement.saveInitiationPaymentFailedResult(requestId);
+//            case "paymentExecution" -> statusManagement.saveExecutionPaymentProcessingResult(null, requestId);
+//            case "paymentInquiry" -> statusManagement.savePaymentInquiryProcessingResult(null, requestId);
 //        }
 //
-//        return response.bodyToMono(PaymentFailedDto.class)
-//                .flatMap(errorDto -> {
-//                    log.error("5xx Error: {}", errorDto);
-//                    statusManagement.saveExceptionLogs("PaymentTaxException", errorDto.getMessage(), requestId,
-//                            ConverterHelper.convertResponseToJson(errorDto), serviceName, "EXCEPTION");
-//                    return Mono.error(new PaymentTaxException(serviceName + "payment.failed", errorDto.getMessage(),
-//                            null, response.statusCode()));
-//                });
+//        statusManagement.saveExceptionLogs("PaymentTax5xxException", errorDto.getMessage(), requestId,
+//                ConverterHelper.convertResponseToJson(errorDto), serviceName, "EXCEPTION");
 //    }
+
+    @SneakyThrows
+    private Mono<? extends Throwable> handle4xxError(ClientResponse response, String requestId, String serviceName) {
+        log.error("4xx Error in save4xxException method");
+
+        switch (serviceName) {
+            case "paymentInitiation" -> statusManagement.saveInitiationPaymentFailedResult(requestId);
+            case "paymentExecution" -> statusManagement.saveExecutionPaymentFailedResult(null, requestId);
+            case "paymentInquiry" -> statusManagement.savePaymentInquiryFailedResult(null, requestId);
+        }
+
+        return response.bodyToMono(PaymentFailedDto.class)
+                .flatMap(errorDto -> {
+                    log.error("4xx Error: {}", errorDto);
+                    statusManagement.saveExceptionLogs("PaymentTax4xxException", errorDto.getMessage(), requestId,
+                            ConverterHelper.convertResponseToJson(errorDto), serviceName, "EXCEPTION");
+                    return Mono.error(new PaymentTax4xxException(errorDto.getMessage(),
+                            errorDto.getDetails() != null ? errorDto.getDetails().get(0).getMessage() : null,
+                            errorDto.getDetails() != null ? errorDto.getDetails().get(0).getItem() : null,
+                            response.statusCode()));
+                });
+
+    }
+
+    @SneakyThrows
+    private Mono<? extends Throwable> handle5xxError(ClientResponse response, String requestId, String serviceName) {
+        log.error("5xx Error in payment service");
+
+        switch (serviceName) {
+            case "paymentInitiation" -> statusManagement.saveInitiationPaymentFailedResult(requestId);
+            case "paymentExecution" -> statusManagement.saveExecutionPaymentProcessingResult(null, requestId);
+            case "paymentInquiry" -> statusManagement.savePaymentInquiryProcessingResult(null, requestId);
+        }
+
+        return response.bodyToMono(PaymentFailedDto.class)
+                .flatMap(errorDto -> {
+                    log.error("5xx Error: {}", errorDto);
+                    statusManagement.saveExceptionLogs("PaymentTax5xxException", errorDto.getMessage(), requestId,
+                            ConverterHelper.convertResponseToJson(errorDto), serviceName, "EXCEPTION");
+                    return Mono.error(new PaymentTaxException(serviceName + "payment.failed", errorDto.getMessage(),
+                            null, response.statusCode()));
+                });
+    }
 }

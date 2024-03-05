@@ -1,7 +1,10 @@
 package ir.co.sadad.departuretaxapi.services;
 
 import ir.co.sadad.departuretaxapi.dtos.*;
-import ir.co.sadad.departuretaxapi.dtos.provider.*;
+import ir.co.sadad.departuretaxapi.dtos.provider.ExecutionPaymentReqDto;
+import ir.co.sadad.departuretaxapi.dtos.provider.InitiationPaymentReqDto;
+import ir.co.sadad.departuretaxapi.dtos.provider.PushOrderReqDto;
+import ir.co.sadad.departuretaxapi.dtos.provider.TypeInquiryReqDto;
 import ir.co.sadad.departuretaxapi.dtos.provider.responses.*;
 import ir.co.sadad.departuretaxapi.entities.DepartureGroupType;
 import ir.co.sadad.departuretaxapi.entities.DepartureTaxPayment;
@@ -9,6 +12,7 @@ import ir.co.sadad.departuretaxapi.entities.DepartureTaxUser;
 import ir.co.sadad.departuretaxapi.enums.*;
 import ir.co.sadad.departuretaxapi.exceptions.*;
 import ir.co.sadad.departuretaxapi.repositories.DepartureGroupTypeRepository;
+import ir.co.sadad.departuretaxapi.repositories.DepartureTaxPaymentRepository;
 import ir.co.sadad.departuretaxapi.repositories.DepartureTaxUserRepository;
 import ir.co.sadad.departuretaxapi.services.providers.MoneyTransferService;
 import ir.co.sadad.departuretaxapi.services.providers.PSPDepartureTaxService;
@@ -30,6 +34,7 @@ import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.text.SimpleDateFormat;
+import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -63,6 +68,8 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
     private String terminalId;
     @Value(value = "${taxPayment.targetAccount}")
     private String targetAccount;
+    @Value(value = "${taxPayment.daysToCheckRepetitiveInquiry}")
+    private int daysToCheckRepetitiveInquiry;
 
     private final DepartureGroupTypeRepository groupTypeRepository;
     private final DepartureTaxUserRepository departureTaxUserRepository;
@@ -71,6 +78,8 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
     private final PichakService pichakService;
     private final StatusManagementService statusManagement;
     private final ModelMapper modelMapper;
+
+    private final DepartureTaxPaymentRepository taxPaymentRepository;
 
     public List<DepartureTaxGroupDto> DepartureGroupList() {
         List<DepartureTaxGroupDto> taxGroupDto = new ArrayList<>();
@@ -97,6 +106,8 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
 
         try {
             serviceResult = pspDepartureTaxService.serviceTypeInquiryProvider(typeInquiryReqDto);
+
+            checkIfTypeInquiryPaidDaysAgo(typeReqDto.getNationalCode(), serviceResult.getServiceType());
 
             jsonData = ConverterHelper.convertResponseToJson(serviceResult);
             status = "FAILED";
@@ -136,6 +147,8 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
                     null, jsonData, "serviceTypeInquiry", status);
             if (e instanceof PspBorderLineException)
                 throw new DepartureTaxException(e.getMessage(), ((DepartureTaxException) e).getHttpStatusCode());
+            if (e instanceof DepartureTaxException)
+                throw new DepartureTaxException(e.getMessage(), HttpStatus.BAD_REQUEST);
             throw new DepartureTaxException("GENERAL_INTERNAL_ERROR", HttpStatus.INTERNAL_SERVER_ERROR);
         }
 
@@ -146,6 +159,7 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
     @SneakyThrows
     public PaymentOrderResDto initiatePayment(PaymentOrderReqDto orderReqDto, String token, String userAgent) {
         DepartureTaxUser savedUser = findUserByRequestId(orderReqDto.getRequestId());
+        checkIfRequestHasSuccessOrUnknownPayment(savedUser);
 
         InitiationPaymentReqDto initiateReqDto = preparePaymentOrder(orderReqDto.getFromAccount(), savedUser.getAmount());
         PaymentOrderResDto result = new PaymentOrderResDto();
@@ -169,7 +183,7 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
                 result.setRequestId(orderReqDto.getRequestId());
                 result.setInstructionIdentification(serviceResult.getInstructionIdentification());
                 result.setIsRequiredTan(serviceResult.getIsRequiredTan());
-                statusManagement.saveInitiationPaymentResult(initiateReqDto, result);
+                statusManagement.saveInitiationPaymentSuccessResult(initiateReqDto, result);
                 statusManagement.saveExceptionLogs("", "",
                         orderReqDto.getRequestId(), jsonData, "initiatePayment", "SUCCESS");
 
@@ -202,6 +216,8 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
     public PushOrderFinalResDto executePaymentAndPushOrder(PaymentFinalReqDto finalUserReqDto, String token, String userAgent) {
         DepartureTaxUser savedUser = findUserByRequestId(finalUserReqDto.getRequestId());
 
+        checkIfSuccessOrUnknownPaymentCalledAgain(finalUserReqDto.getInstructionIdentification(), savedUser.getUserPayment());
+
         ExecutionPaymentResDto paymentResult;
         statusManagement.saveExecutionPaymentRequest(savedUser);
         String jsonData = null;
@@ -218,14 +234,15 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
             jsonData = ConverterHelper.convertResponseToJson(paymentResult);
             switch (paymentResult.getTransactionStatus()) {
                 case SUCCEEDED -> {
-                    statusManagement.saveExecutionPaymentResult(paymentResult, finalUserReqDto.getRequestId());
+                    statusManagement.saveExecutionPaymentSuccessResult(paymentResult, finalUserReqDto.getRequestId());
                     statusManagement.saveExceptionLogs("", "", finalUserReqDto.getRequestId(),
                             jsonData, "executePaymentAndPushOrder", "SUCCESS");
 
-                    return pushOrderRequest(finalUserReqDto.getRequestId(), false);
+                    return pushOrderRequest(finalUserReqDto.getRequestId(), paymentResult.getTraceId(),
+                            DateTimeDepartureFormat.paymentDate(paymentResult.getInitiationDate()), false);
                 }
                 case FAILED -> {
-                    statusManagement.saveExecutionPaymentFailedResult(finalUserReqDto.getRequestId());
+                    statusManagement.saveExecutionPaymentFailedResult(paymentResult, finalUserReqDto.getRequestId());
                     throw new PaymentTaxException("PAYMENT_ERROR", HttpStatus.BAD_REQUEST);
 
                 }
@@ -247,14 +264,14 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
 
     @Override
     @SneakyThrows
-    public PushOrderFinalResDto pushOrderRequest(String requestId, Boolean inquiry) {
+    public PushOrderFinalResDto pushOrderRequest(String requestId, String traceId, String initiateDate, Boolean inquiry) {
 
         statusManagement.savePushOrderRequest(requestId);
         PushOrderResDto result;
         String jsonData = null;
 
         try {
-            result = pspDepartureTaxService.pushOrderProvider(preparePushOrderRequest(requestId, inquiry));
+            result = pspDepartureTaxService.pushOrderProvider(preparePushOrderRequest(requestId, traceId, initiateDate, inquiry));
 
             jsonData = ConverterHelper.convertResponseToJson(result);
             switch (result.getResCode()) {
@@ -262,7 +279,7 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
                     statusManagement.savePushOrderSuccessResult(result, requestId);
                     statusManagement.saveExceptionLogs("", "", requestId, jsonData,
                             "pushOrderRequest", "SUCCESS");
-                    return makePushOrderResForClient(requestId);
+                    return makePushOrderResForClient(requestId, result);
                 }
                 case 1 -> throw new PspDepartureException("psp.push.order.repeated", HttpStatus.BAD_REQUEST);
                 case 2 -> throw new PspDepartureException("psp.push.order.exception", HttpStatus.BAD_REQUEST);
@@ -279,6 +296,8 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
 
     }
 
+    @Override
+    @SneakyThrows
     public PushOrderFinalResDto paymentProcessingInquiry(String requestId, String token, String userAgent) {
         DepartureTaxUser savedUser = departureTaxUserRepository.findByRequestId(requestId).orElseThrow(
                 () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
@@ -289,7 +308,7 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
                 paymentResult = moneyTransferService.paymentInquiry(savedUser.getUserPayment().getInstructionIdentification(),
                         requestId, token, userAgent);
             } catch (PaymentTax4xxException e) {
-                throw new PaymentTax4xxException("PAYMENT_ERROR", e.getMessage(), HttpStatus.BAD_REQUEST);
+                throw new PaymentTax4xxException("PAYMENT_INQUIRY_FAILED", e.getMessage(), HttpStatus.BAD_REQUEST);
             } catch (PaymentTaxException e) {
                 throw new DepartureTaxException("GENERAL_INTERNAL_ERROR", HttpStatus.INTERNAL_SERVER_ERROR);
             }
@@ -299,11 +318,12 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
                 jsonData = ConverterHelper.convertResponseToJson(paymentResult);
                 switch (paymentResult.getTransactionStatus()) {
                     case SUCCEEDED -> {
-                        statusManagement.savePaymentInquiryResult(paymentResult, requestId);
+                        statusManagement.savePaymentInquirySuccessResult(paymentResult, requestId);
                         statusManagement.saveExceptionLogs("", "", requestId,
                                 jsonData, "executePaymentAndPushOrder", "SUCCESS");
 
-                        return pushOrderRequest(requestId, false);
+                        return pushOrderRequest(requestId, paymentResult.getTraceId(),
+                                DateTimeDepartureFormat.paymentDate(paymentResult.getInitiationDate()), false);
                     }
                     case FAILED -> {
                         statusManagement.savePaymentInquiryFailedResult(paymentResult, requestId);
@@ -326,7 +346,7 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
             }
 
         } else if (savedUser.getRequestStatus().equals(DepartureRequestStatus.UNKNOWN))
-            return pushOrderRequest(requestId, true);
+            return pushOrderRequest(requestId, null, null, true);
 
         else throw new DepartureTaxException("GENERAL_INTERNAL_ERROR", HttpStatus.INTERNAL_SERVER_ERROR);
 
@@ -342,13 +362,17 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
         int startIndex = (historyReq.getPageNumber() - 1) * historyReq.getPageSize();
         int endIndex = Math.min(startIndex + historyReq.getPageSize(), totalItems);
 
-        startIndex = Math.max(startIndex, 0);  // Ensure startIndex is not negative
+        startIndex = Math.max(startIndex, 0);  // ensure startIndex is not negative
         endIndex = Math.min(endIndex, totalItems);
 
-        historyList = historyList.subList(startIndex, endIndex);
+        try {
+            historyList = historyList.subList(startIndex, endIndex);
+        } catch (Exception e) {
+            throw new DepartureTaxException("INVALID_INDEX_RANGE", HttpStatus.BAD_REQUEST);
+        }
 
+        List<DepartureTaxHistoryResDto> res = new ArrayList<>();
         if (!historyList.isEmpty()) {
-            List<DepartureTaxHistoryResDto> res = new ArrayList<>();
             for (DepartureTaxUser record : historyList) {
                 DepartureTaxHistoryResDto his = new DepartureTaxHistoryResDto();
                 modelMapper.map(record, his);
@@ -373,10 +397,8 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
                 }
                 res.add(his);
             }
-            return res;
-
-        } else return null;
-
+        }
+        return res;
     }
 
     @Override
@@ -453,7 +475,7 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
 
     }
 
-    private PushOrderFinalResDto makePushOrderResForClient(String userId) {
+    private PushOrderFinalResDto makePushOrderResForClient(String userId, PushOrderResDto result) {
         DepartureTaxUser user = departureTaxUserRepository.findByRequestId(userId).orElseThrow(
                 () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
 
@@ -462,9 +484,9 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
             throw new DepartureTaxException("user.not.paid", HttpStatus.BAD_REQUEST);
 
         return PushOrderFinalResDto.builder()
-                .orderId(user.getOrderId())
-                .referenceNumber(user.getReferenceNumber())
-                .offlineId(user.getOfflineId())
+                .orderId(result.getOrderId())
+                .referenceNumber(result.getReferenceNumber())
+                .offlineId(result.getOfflineId())
                 .requestId(user.getRequestId())
                 .instructionIdentification(userPayment.getInstructionIdentification())
                 .identification(userPayment.getIdentification())
@@ -483,13 +505,13 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
                 .serviceType(TripType.getByCode(user.getServiceType()))
                 .serviceTypeTitle(user.getServiceTypeTitle())
                 .amount(user.getAmount())
-                .responseDateTime(user.getResponseDateTime())
+                .responseDateTime(DateTimeDepartureFormat.currentUTCDate())
                 .status(user.getRequestStatus())
                 .build();
     }
 
 
-    private PushOrderReqDto preparePushOrderRequest(String userId, Boolean inquiry) throws Exception {
+    private PushOrderReqDto preparePushOrderRequest(String userId, String traceId, String initiateDate, Boolean inquiry) throws Exception {
         DepartureTaxUser user = departureTaxUserRepository.findByRequestId(userId).orElseThrow(
                 () -> new DepartureTaxException("user.not.found", HttpStatus.BAD_REQUEST));
 
@@ -502,11 +524,11 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
                 .lastName(user.getLastName())
                 .serviceType(user.getServiceType())
                 .nationalCode(user.getNationalCode())
-                .transactionDateTime(DateTimeDepartureFormat.pushOrderDate(savedPayment.getInitiationDate()))
-                .referenceNumber(inquiry ? ConverterHelper.createRRNRandomly() : ConverterHelper.createRRN(savedPayment.getTraceId()))
+                .transactionDateTime(DateTimeDepartureFormat.pushOrderDate(initiateDate != null ? initiateDate : savedPayment.getInitiationDate()))
+                .referenceNumber(inquiry ? ConverterHelper.createRRNRandomly() : ConverterHelper.createRRN(traceId != null ? traceId : savedPayment.getTraceId()))
                 .mobile(user.getMobile())
                 .email(user.getEmail())
-                .systemTraceNo(savedPayment.getTraceId())
+                .systemTraceNo(traceId != null ? traceId : savedPayment.getTraceId())
                 .channel(user.getChannel())
                 .build();
 
@@ -530,8 +552,14 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
         orderReqDto.setKeyVersion(keyVersion);
         orderReqDto.setSignData(Base64.encodeBase64String(signTripleDes.encrypt(signData, StandardCharsets.UTF_16LE)));
 
-        return orderReqDto;
+        try { // we need RRN to give back money when payment is successful but pushOrder has 500 error
+            user.setReferenceNumber(orderReqDto.getReferenceNumber());
+            departureTaxUserRepository.saveAndFlush(user);
+        } catch (Exception e) {
+            log.error("storing reference-number before calling pushOrder service has error: " + e.getMessage());
+        }
 
+        return orderReqDto;
     }
 
     private TypeInquiryReqDto prepareServiceTypeInquiryRequest(String nationalCode, int serviceGroupCode) throws GeneralSecurityException, UnsupportedEncodingException {
@@ -577,4 +605,41 @@ public class DepartureTaxServiceImpl implements DepartureTaxService {
                 .status(TransactionStatus.ACTIVE)
                 .authorizationCode(authorizationCode).build();
     }
+
+    private void checkIfSuccessOrUnknownPaymentCalledAgain(String instructionIdentification, DepartureTaxPayment userPayment) {
+        try {
+            DepartureTaxPayment savedPayment = taxPaymentRepository.findByInstructionIdentification(instructionIdentification);
+            if (userPayment.getPaymentId().equals(savedPayment.getPaymentId()))
+                if (savedPayment.getTransactionStatus() != null &&
+                        (savedPayment.getTransactionStatus().equals(TransactionStatus.SUCCEEDED) ||
+                                savedPayment.getTransactionStatus().equals(TransactionStatus.UNKNOWN)))
+                    throw new PaymentTaxException("DUPLICATED_REQUEST_ERROR", HttpStatus.BAD_REQUEST);
+        } catch (Exception e) {
+            throw new PaymentTaxException("DUPLICATED_REQUEST_ERROR", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private void checkIfTypeInquiryPaidDaysAgo(String nationalCode, int serviceGroupCode) {
+        departureTaxUserRepository.findTopByNationalCodeAndServiceTypeOrderByResponseDateTimeDesc(nationalCode, serviceGroupCode)
+                .ifPresent(user -> {
+                    if (user.getRequestStatus().equals(DepartureRequestStatus.SUCCESS) ||
+                            user.getRequestStatus().equals(DepartureRequestStatus.UNKNOWN) ||
+                            user.getRequestStatus().equals(DepartureRequestStatus.PROCESSING)) {
+                        ZonedDateTime responseDateTime = ZonedDateTime.parse(user.getResponseDateTime());
+                        if (responseDateTime.isAfter(DateTimeDepartureFormat.daysBeforeCurrentUTCDate(daysToCheckRepetitiveInquiry)))
+                            throw new DepartureTaxException("REPETITIVE_INQUIRY", HttpStatus.BAD_REQUEST);
+                    }
+                });
+    }
+
+
+    private void checkIfRequestHasSuccessOrUnknownPayment(DepartureTaxUser savedUser) {
+        if (savedUser.getUserPayment() != null) {
+            if (savedUser.getUserPayment().getTransactionStatus() != null &&
+                    (savedUser.getUserPayment().getTransactionStatus().equals(TransactionStatus.SUCCEEDED) ||
+                            savedUser.getUserPayment().getTransactionStatus().equals(TransactionStatus.UNKNOWN)))
+                throw new PaymentTaxException("DUPLICATED_REQUEST_ERROR", HttpStatus.BAD_REQUEST);
+        }
+    }
+
 }

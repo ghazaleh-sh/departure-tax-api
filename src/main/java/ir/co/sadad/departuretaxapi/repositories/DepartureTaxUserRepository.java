@@ -20,6 +20,8 @@ public interface DepartureTaxUserRepository extends JpaRepository<DepartureTaxUs
 
     Optional<DepartureTaxUser> findByRequestId(String requestId);
 
+    Optional<DepartureTaxUser> findTopByNationalCodeAndServiceTypeOrderByResponseDateTimeDesc(String passengerNationalCode, int serviceType);
+
     static Specification<DepartureTaxUser> withSsn(String ssn) {
         return (root, query, criteriaBuilder) ->
                 criteriaBuilder.equal(root.get("createdBy"), ssn);
